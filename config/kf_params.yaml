@@ -46,8 +46,8 @@ imu_accel_cutoff_hz: 30.0
 imu_gyro_cutoff_hz: 50.0
 
 # VIO observation noise
-vio_pos_std: 0.01   # m
-vio_vel_std: 0.10   # m/s # not accurate
+vio_pos_std: 0.001   # m
+vio_vel_std: 0.50   # m/s # not accurate
 vio_quat_std: 0.001  # rad  (orientation quaternion noise, fused with pos+vel in 9-DOF update)
 
 # PnP observation noise (more reliable position source)
@@ -56,7 +56,7 @@ pnp_pos_std: 0.50   # m
 # PnP Mahalanobis gate: reject if sqrt(y^T S^{-1} y) > pnp_gate_sigma
 # 5.0 sigma ≈ chi2(3) CDF ~99.9999 % — rejects only gross outliers
 # Reduce to 3.0 for tighter gating when PnP detections are reliable
-pnp_gate_sigma: 3.0
+pnp_gate_sigma: 5.0
 
 # ---------------------------------------------------------------------------
 # VIO delay compensation

@@ -486,6 +486,10 @@ private:
         } else {
             ROS_WARN_THROTTLE(1.0, "PnP measurement rejected by Mahalanobis gate (sigma=%.1f)",
                               pnp_gate_sigma_);
+            if (log_pnp_)
+                log_pnp_->write(t, pos(0), pos(1), pos(2));
+            // PnP update: correct state only, do not publish or log kf_traj
+            // (the corrected state will be logged by the next VIO callback)
         }
     }
 
