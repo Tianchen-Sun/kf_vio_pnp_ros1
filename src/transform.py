@@ -63,6 +63,27 @@ class Transform:
         """Transform yaw angle from VIO frame to PnP frame"""
         return yaw_vio + self.vio_yaw_rel_pnp
 
+    def quaternion_multiply(self, q1, q2):
+        """Hamilton product of two quaternions in ROS order [x, y, z, w]."""
+        x1, y1, z1, w1 = np.array(q1, dtype=float)
+        x2, y2, z2, w2 = np.array(q2, dtype=float)
+        return np.array([
+            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+        ], dtype=float)
+
+    def quaternion_vio_to_pnp(self, q_vio):
+        """
+        Transform orientation from VIO frame to PnP frame using the configured
+        yaw offset between frames.
+        """
+        q_offset = self.yaw_to_quaternion(self.vio_yaw_rel_pnp)
+        q_pnp = self.quaternion_multiply(q_offset, q_vio)
+        q_pnp = q_pnp / np.linalg.norm(q_pnp)
+        return q_pnp
+
     def euler_to_quaternion(self, roll, pitch, yaw):
         """
         Convert Euler angles (roll, pitch, yaw) to quaternion (x, y, z, w)

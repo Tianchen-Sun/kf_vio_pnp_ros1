@@ -175,7 +175,7 @@ class KFNode:
         self._kf = VioAugmentedKalmanFilter(cfg)
         self._initialized = False
         self._init_vel = [0.0, 0.0, 0.0]
-        self._yaw = 0.0
+        self._quat = np.array([0.0, 0.0, 0.0, 1.0], dtype=float)
         self._last_accel_meas = np.zeros(3, dtype=float)
         self._bias_logger = None
         self._vio_logger  = None  # raw VIO trajectory (transformed to PnP frame)
@@ -231,11 +231,11 @@ class KFNode:
                msg.twist.twist.linear.y,
                msg.twist.twist.linear.z]
         ori = msg.pose.pose.orientation
+        q_vio = np.array([ori.x, ori.y, ori.z, ori.w], dtype=float)
 
-        self._yaw = self._transform.quaternion_to_yaw([ori.x, ori.y, ori.z, ori.w])
         pos_tf = self._transform.vio_to_pnp(pos)
         vel_tf = self._transform.vio_vector_to_pnp(vel)
-        self._yaw = self._transform.yaw_vio_to_pnp(self._yaw)
+        self._quat = self._transform.quaternion_vio_to_pnp(q_vio)
 
         if not self._initialized:
             self._init_filter(t, pos_tf, vel_tf)
@@ -304,7 +304,7 @@ class KFNode:
 
     def _publish_fused(self, t):
         p, v, b, P = self._kf.get_state()
-        quat = self._transform.yaw_to_quaternion(self._yaw)
+        quat = self._quat
 
         msg = Odometry()
         msg.header.stamp = rospy.Time.from_sec(t)
