@@ -250,7 +250,7 @@ class KFNode:
         self._last_accel_meas = accel
         self._last_gyro_meas  = gyro
 
-        rospy.loginfo(f"imu_callback at t={t:.3f}s: accel={accel}, gyro={gyro}")
+        # rospy.loginfo(f"imu_callback at t={t:.3f}s: accel={accel}, gyro={gyro}")
         
         if self._initialized:
             self._kf.propagate_imu(t, accel, gyro)
