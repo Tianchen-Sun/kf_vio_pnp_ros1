@@ -3,10 +3,10 @@
 # vio_translation_rel_pnp: position of VIO origin expressed in World frame (m)
 # init_yaw_rad: yaw of VIO frame relative to World frame (rad)
 # ---------------------------------------------------------------------------
-init_pos_x: 11.5  # m 11.5
-init_pos_y: 15.0   # m 15.0
+init_pos_x: 7.5  # m 11.5
+init_pos_y: 5.5   # m 15.0
 init_pos_z: 0.0     # m
-init_yaw_rad: -0.0 # rad
+init_yaw_rad: 1.57 # rad
 
 # ---------------------------------------------------------------------------
 # Gate scene CSV path (used by GateMap)

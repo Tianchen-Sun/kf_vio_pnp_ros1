@@ -8,8 +8,8 @@ Reads the three CSV logs produced by kf_node.py / kf_node_cpp:
   - pnp_detections_*.csv  : PnP-derived quadrotor positions in world frame
 
 Plots
-  Figure 1 ─ left  : 2-D XY trajectory  (VIO + KF, coloured by speed; PnP as crosses)
-           ─ right : 3-D trajectory     (same components)
+    Figure 1 ─ left  : 2-D XY trajectory  (VIO + KF with fixed colours; PnP as crosses)
+                     ─ right : 3-D trajectory     (same components)
   Figure 2  : Euler-angle comparison  (VIO vs KF fused)  – roll / pitch / yaw vs time
 """
 
@@ -20,7 +20,6 @@ import sys
 from typing import Optional
 
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 import numpy as np
 import pandas as pd
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 – registers 3d projection
@@ -93,28 +92,17 @@ def quat_to_euler_deg(qw: np.ndarray,
 
 
 # ---------------------------------------------------------------------------
-# Colour helpers
+# Line helpers
 # ---------------------------------------------------------------------------
 
-def _speed_colours(speed: np.ndarray, cmap_name: str = 'coolwarm') -> np.ndarray:
-    """Normalise *speed* to [0, 1] and map through *cmap_name* (blue→red)."""
-    cmap = plt.get_cmap(cmap_name)
-    vmin, vmax = speed.min(), speed.max()
-    norm = mcolors.Normalize(vmin=vmin, vmax=max(vmax, vmin + 1e-6))
-    return cmap(norm(speed)), norm, cmap
+def _line_2d(ax, x, y, colour):
+    """Draw a 2-D polyline on *ax* using a fixed colour."""
+    ax.plot(x, y, color=colour, linewidth=1.4, alpha=0.9)
 
 
-def _coloured_line_2d(ax, x, y, colours):
-    """Draw a polyline on *ax* with per-segment colours from *colours* array."""
-    for i in range(len(x) - 1):
-        ax.plot(x[i:i+2], y[i:i+2], color=colours[i], linewidth=1.2, alpha=0.85)
-
-
-def _coloured_line_3d(ax, x, y, z, colours):
-    """Draw a 3-D polyline with per-segment colours."""
-    for i in range(len(x) - 1):
-        ax.plot(x[i:i+2], y[i:i+2], z[i:i+2],
-                color=colours[i], linewidth=1.2, alpha=0.85)
+def _line_3d(ax, x, y, z, colour):
+    """Draw a 3-D polyline using a fixed colour."""
+    ax.plot(x, y, z, color=colour, linewidth=1.4, alpha=0.9)
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +114,7 @@ def plot_euler(axes, vio: pd.DataFrame, kf: pd.DataFrame):
 
     *axes* must be an iterable of 3 Axes objects (one per angle).
     Time axis is seconds elapsed from the start of the VIO log.
-    Angles are unwrapped to avoid ±180° discontinuities.
+    Angles are kept in the natural (-π, π) range (radians).
     """
     # Common zero reference so both series start at t=0 s
     t0 = min(vio['timestamp'].iloc[0], kf['timestamp'].iloc[0])
@@ -139,12 +127,9 @@ def plot_euler(axes, vio: pd.DataFrame, kf: pd.DataFrame):
     kf_roll_r,  kf_pitch_r,  kf_yaw_r  = quat_to_euler_deg(
         kf['qw'].values,  kf['qx'].values,  kf['qy'].values,  kf['qz'].values)
 
-    # Unwrap each angle series to remove ±180° wrap-around discontinuities
-    def unwrap_deg(arr):
-        return np.degrees(np.unwrap(np.radians(arr)))
-
-    vio_data = [unwrap_deg(vio_roll_r),  unwrap_deg(vio_pitch_r),  unwrap_deg(vio_yaw_r)]
-    kf_data  = [unwrap_deg(kf_roll_r),   unwrap_deg(kf_pitch_r),   unwrap_deg(kf_yaw_r)]
+    # Convert degrees to radians; arctan2/arcsin already produce values in (-π, π)
+    vio_data = [np.radians(vio_roll_r),  np.radians(vio_pitch_r),  np.radians(vio_yaw_r)]
+    kf_data  = [np.radians(kf_roll_r),   np.radians(kf_pitch_r),   np.radians(kf_yaw_r)]
     titles   = ['Roll', 'Pitch', 'Yaw']
 
     for i, (ax, title, vd, kd) in enumerate(zip(axes, titles, vio_data, kf_data)):
@@ -152,6 +137,9 @@ def plot_euler(axes, vio: pd.DataFrame, kf: pd.DataFrame):
         ax.plot(kf_x,  kd, color='tab:red',  lw=1.2, alpha=0.85, label='KF (fused)')
         ax.set_title(title, fontsize=11)
         ax.set_ylabel('rad')
+        ax.set_ylim(-np.pi, np.pi)
+        ax.set_yticks([-np.pi, -np.pi/2, 0, np.pi/2, np.pi])
+        ax.set_yticklabels([r'$-\pi$', r'$-\pi/2$', '0', r'$\pi/2$', r'$\pi$'])
         ax.legend(fontsize=9)
         ax.grid(True, alpha=0.3)
         # Only label the x-axis on the bottom subplot
@@ -165,22 +153,12 @@ def plot_euler(axes, vio: pd.DataFrame, kf: pd.DataFrame):
 
 def plot_2d(ax, vio: pd.DataFrame, kf: pd.DataFrame,
             pnp: Optional[pd.DataFrame]):
-    """2-D XY trajectory plot.  VIO = Blues, KF = Reds, both coloured by speed."""
-    speed_all = np.concatenate([vio['speed'].values, kf['speed'].values])
-    shared_norm = mcolors.Normalize(vmin=speed_all.min(),
-                                    vmax=max(speed_all.max(), speed_all.min() + 1e-6))
+    """2-D XY trajectory plot with fixed colours for each source."""
+    _line_2d(ax, vio['px'].values, vio['py'].values, 'tab:blue')
+    ax.plot([], [], color='tab:blue', lw=2, label='VIO (raw)')
 
-    # VIO trajectory – Blues colourmap (dark blue = fast)
-    vio_cmap = plt.get_cmap('Blues')
-    v_cols = vio_cmap(shared_norm(vio['speed'].values))
-    _coloured_line_2d(ax, vio['px'].values, vio['py'].values, v_cols)
-    ax.plot([], [], color=vio_cmap(0.8), lw=2, label='VIO (raw)')  # legend proxy
-
-    # KF trajectory – Reds colourmap (dark red = fast)
-    kf_cmap = plt.get_cmap('Reds')
-    kf_cols = kf_cmap(shared_norm(kf['speed'].values))
-    _coloured_line_2d(ax, kf['px'].values, kf['py'].values, kf_cols)
-    ax.plot([], [], color=kf_cmap(0.8), lw=2, label='KF (fused)')  # legend proxy
+    _line_2d(ax, kf['px'].values, kf['py'].values, 'tab:red')
+    ax.plot([], [], color='tab:red', lw=2, label='KF (fused)')
 
     # PnP detections as crosses
     if pnp is not None and not pnp.empty:
@@ -194,12 +172,6 @@ def plot_2d(ax, vio: pd.DataFrame, kf: pd.DataFrame,
     ax.plot(kf['px'].iloc[-1], kf['py'].iloc[-1],
             'rs', ms=8, zorder=6, label='End (KF)')
 
-    # Shared colourbar for speed
-    sm = plt.cm.ScalarMappable(cmap='Greys', norm=shared_norm)
-    sm.set_array([])
-    cbar = plt.colorbar(sm, ax=ax, pad=0.02)
-    cbar.set_label('Speed (m/s) – dark = fast', fontsize=10)
-
     ax.set_xlabel('X (m)')
     ax.set_ylabel('Y (m)')
     ax.set_title('2-D XY Trajectory  (blue = VIO, red = KF)')
@@ -210,24 +182,16 @@ def plot_2d(ax, vio: pd.DataFrame, kf: pd.DataFrame,
 
 def plot_3d(ax, vio: pd.DataFrame, kf: pd.DataFrame,
             pnp: Optional[pd.DataFrame]):
-    """3-D trajectory plot.  VIO = Blues, KF = Reds, both coloured by speed."""
-    speed_all = np.concatenate([vio['speed'].values, kf['speed'].values])
-    shared_norm = mcolors.Normalize(vmin=speed_all.min(),
-                                    vmax=max(speed_all.max(), speed_all.min() + 1e-6))
+    """3-D trajectory plot with fixed colours for each source."""
+    _line_3d(ax,
+             vio['px'].values, vio['py'].values, vio['pz'].values,
+             'tab:blue')
+    ax.plot([], [], [], color='tab:blue', lw=2, label='VIO (raw)')
 
-    vio_cmap = plt.get_cmap('Blues')
-    v_cols = vio_cmap(shared_norm(vio['speed'].values))
-    _coloured_line_3d(ax,
-                      vio['px'].values, vio['py'].values, vio['pz'].values,
-                      v_cols)
-    ax.plot([], [], [], color=vio_cmap(0.8), lw=2, label='VIO (raw)')
-
-    kf_cmap = plt.get_cmap('Reds')
-    kf_cols = kf_cmap(shared_norm(kf['speed'].values))
-    _coloured_line_3d(ax,
-                      kf['px'].values, kf['py'].values, kf['pz'].values,
-                      kf_cols)
-    ax.plot([], [], [], color=kf_cmap(0.8), lw=2, label='KF (fused)')
+    _line_3d(ax,
+             kf['px'].values, kf['py'].values, kf['pz'].values,
+             'tab:red')
+    ax.plot([], [], [], color='tab:red', lw=2, label='KF (fused)')
 
     if pnp is not None and not pnp.empty:
         ax.scatter(pnp['px'].values, pnp['py'].values, pnp['pz'].values,
@@ -263,9 +227,6 @@ def main():
         '--kf',   default=None, help='Path to kf_traj CSV (overrides auto-detect)')
     parser.add_argument(
         '--pnp',  default=None, help='Path to pnp_detections CSV (overrides auto-detect)')
-    parser.add_argument(
-        '--cmap', default='coolwarm',
-        help='Matplotlib colourmap for speed (default: coolwarm)')
     args = parser.parse_args()
 
     log_dir = os.path.abspath(args.log_dir)
