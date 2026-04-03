@@ -1,0 +1,58 @@
+kf_node:
+  ros__parameters:
+
+    # ---------------------------------------------------------------------------
+    # Kalman filter noise parameters
+    # ---------------------------------------------------------------------------
+
+    # IMU acceleration measurement noise std (m/s^2)
+    imu_accel_noise_std: 0.05
+
+    # VIO position bias random-walk std (m/s per sqrt(s))
+    vio_bias_rw_std: 0.005
+
+    # VIO observation noise
+    vio_pos_std: 0.05   # m
+    vio_vel_std: 0.80   # m/s
+
+    # PnP observation noise (more reliable position source)
+    pnp_pos_std: 0.03   # m
+
+    # ---------------------------------------------------------------------------
+    # VIO delay compensation
+    # ---------------------------------------------------------------------------
+    vio_delay_compensation: true
+    vio_delay_sec: 0.0667   # seconds
+
+    # ---------------------------------------------------------------------------
+    # Initial VIO-to-PnP frame alignment
+    # vio_translation_rel_pnp: position of VIO origin expressed in PnP frame (m)
+    # init_yaw_rad: yaw of VIO frame relative to PnP frame (rad)
+    # ---------------------------------------------------------------------------
+    init_pos_x: 0.085   # m
+    init_pos_y: 0.060   # m
+    init_pos_z: 0.0     # m
+    init_yaw_rad: -1.57 # rad
+
+    # ---------------------------------------------------------------------------
+    # MoCap-as-PnP options
+    # Set mocap_as_pnp to true to use /mavros/vision_pose/pose instead of /pnp_pose
+    # ---------------------------------------------------------------------------
+    mocap_as_pnp: true
+
+    # Measurement passing mode: continuous | downsampled | periodic
+    mocap_mode: periodic
+
+    # Target output rate when mode is 'downsampled' or inside a 'periodic' window (Hz)
+    # Assumed input rate is 100 Hz
+    mocap_freq: 10.0
+
+    # 'periodic' mode: duration (s) of the available and unavailable windows
+    mocap_available_duration: 2.0
+    mocap_unavailable_duration: 10.0
+
+    # ---------------------------------------------------------------------------
+    # Gate scene CSV path (used by GateMap)
+    # Absolute path or relative to the working directory when the node is launched
+    # ---------------------------------------------------------------------------
+    scene_csv_path: config/scene.csv
