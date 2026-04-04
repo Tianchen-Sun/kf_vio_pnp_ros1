@@ -280,7 +280,6 @@ class KFNode:
         T_g_to_q = self._pnp_pose_composer.get_T_g_to_q(detection.position)
 
         rospy.loginfo(f"Gate ID: {detection.gate_id}, "
-                      f"{'front' if detection.is_front else 'back'}, "
                       f"Position: {detection.position.tolist()}")
 
         result = self._pnp_pose_composer.comp_quadrotor_pose(detection.gate_id, T_g_to_q)

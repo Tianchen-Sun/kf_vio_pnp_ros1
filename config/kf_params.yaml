@@ -49,4 +49,4 @@ mocap_unavailable_duration: 10.0
 # Gate scene CSV path (used by GateMap)
 # Relative paths are resolved from the package root (kf_vio_pnp_ros1/)
 # ---------------------------------------------------------------------------
-scene_csv_path: config/single_scene.csv
+scene_csv_path: config/scene.csv
