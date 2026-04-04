@@ -15,7 +15,7 @@ from nav_msgs.msg import Odometry
 
 from kf_vio_pnp import VioAugmentedKalmanFilter, KFConfig
 from transform import Transform
-from pnp.gate_map import GateMap
+from pnp.gate_map import GateMap, GatePoseArrayDecoder
 from pnp.pnp_pose_compose import PnPPoseCompose
 
 
@@ -91,6 +91,30 @@ class BiasLogger:
             rospy.logerr(f"Failed to close bias log: {e}")
 
 
+class CsvLogger:
+    """Generic CSV logger: opens a timestamped file, writes a header, then appends rows."""
+
+    def __init__(self, log_dir: str, prefix: str, columns: list):
+        os.makedirs(log_dir, exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self._path = os.path.join(log_dir, f'{prefix}_{timestamp}.csv')
+        self._file = open(self._path, 'w', newline='')
+        self._writer = csv.writer(self._file)
+        self._writer.writerow(columns)
+        rospy.loginfo(f"Logging {prefix} to: {self._path}")
+
+    def write(self, row: list):
+        self._writer.writerow(row)
+        self._file.flush()
+
+    def close(self):
+        try:
+            self._file.close()
+            rospy.loginfo(f"Closed log: {self._path}")
+        except Exception as e:
+            rospy.logerr(f"Failed to close log {self._path}: {e}")
+
+
 class KFNode:
     """
     ROS1 node that fuses VIO odometry and PnP pose estimates using
@@ -138,7 +162,13 @@ class KFNode:
 
         # --- Gate map & PnP pose composer ---
         scene_csv_path = rospy.get_param('~scene_csv_path', 'config/scene.csv')
-        self._gate_map = GateMap(Path(scene_csv_path))
+
+        # logger the scene CSV path for debugging
+        rospy.loginfo(f"Using gate scene CSV path: {scene_csv_path}")
+        scene_csv_path = Path(scene_csv_path)
+        if not scene_csv_path.is_absolute():
+            scene_csv_path = Path(__file__).parent.parent / scene_csv_path
+        self._gate_map = GateMap(scene_csv_path)
         self._pnp_pose_composer = PnPPoseCompose(self._gate_map)
 
         # --- Internal state ---
@@ -148,10 +178,13 @@ class KFNode:
         self._yaw = 0.0
         self._last_accel_meas = np.zeros(3, dtype=float)
         self._bias_logger = None
+        self._vio_logger  = None  # raw VIO trajectory (transformed to PnP frame)
+        self._kf_logger   = None  # KF fused trajectory
+        self._pnp_logger  = None  # PnP detections in world frame
 
         # --- Subscribers ---
         rospy.Subscriber('/d2vins/odometry', Odometry, self._vio_callback, queue_size=10)
-        self._gate_pose_sub = rospy.Subscriber('/gate_poses', PoseArray, self._gate_pose_callback, queue_size=10)
+        self._gate_pose_sub = rospy.Subscriber('/gate_pose/pose', PoseArray, self._gate_pose_callback, queue_size=10)
         self._mocap_sub     = rospy.Subscriber('/mavros/vision_pose/pose', PoseStamped, self._mocap_callback, queue_size=10)
 
         # --- Publisher ---
@@ -176,8 +209,14 @@ class KFNode:
         )
         try:
             self._bias_logger = BiasLogger(log_dir)
+            self._vio_logger  = CsvLogger(log_dir, 'vio_traj',
+                ['timestamp', 'px', 'py', 'pz', 'vx', 'vy', 'vz'])
+            self._kf_logger   = CsvLogger(log_dir, 'kf_traj',
+                ['timestamp', 'px', 'py', 'pz', 'vx', 'vy', 'vz'])
+            self._pnp_logger  = CsvLogger(log_dir, 'pnp_detections',
+                ['timestamp', 'px', 'py', 'pz'])
         except Exception as e:
-            rospy.logerr(f"Failed to initialise bias logger: {e}")
+            rospy.logerr(f"Failed to initialise loggers: {e}")
 
     # ------------------------------------------------------------------
     # Subscriber callbacks
@@ -202,6 +241,12 @@ class KFNode:
             self._init_filter(t, pos_tf, vel_tf)
             return
 
+        # Log raw VIO position (in PnP/world frame)
+        if self._vio_logger is not None:
+            self._vio_logger.write([t,
+                pos_tf[0], pos_tf[1], pos_tf[2],
+                vel_tf[0], vel_tf[1], vel_tf[2]])
+
         event = {"t": t, "type": "vio", "pos": pos_tf, "vel": vel_tf}
         self._kf.process_event(event, accel_meas=self._last_accel_meas)
         self._publish_fused(t)
@@ -212,6 +257,9 @@ class KFNode:
         if not self._initialized:
             self._init_filter(t, pos, self._init_vel)
             return
+        # Log PnP detection in world frame
+        if self._pnp_logger is not None:
+            self._pnp_logger.write([t, pos[0], pos[1], pos[2]])
         event = {"t": t, "type": "pnp", "pos": pos}
         self._kf.process_event(event, accel_meas=self._last_accel_meas)
         self._publish_fused(t)
@@ -219,28 +267,26 @@ class KFNode:
 
     def _gate_pose_callback(self, msg: PoseArray):
         """
-        Gate pose array callback.  The array is one-hot: only the non-zero
-        element is a valid detection and its index is the gate id.
+        Gate pose array callback.
+        Decodes the one-hot PoseArray using GatePoseArrayDecoder, computes the
+        quadrotor world pose via PnPPoseCompose, then feeds it to the KF.
         """
         t = msg.header.stamp.to_sec()
 
-        for gate_id, pose in enumerate(msg.poses):
-            gate_pos_quad = [pose.position.x, pose.position.y, pose.position.z]
+        detection = GatePoseArrayDecoder.decode(msg.poses)
+        if detection is None:
+            return
 
-            # Skip zero entries (no detection for this gate id)
-            if gate_pos_quad[0] == 0.0 and gate_pos_quad[1] == 0.0 and gate_pos_quad[2] == 0.0:
-                continue
+        T_g_to_q = self._pnp_pose_composer.get_T_g_to_q(detection.position)
 
-            gate_pos_np = np.array(gate_pos_quad, dtype=float)
-            T_g_to_q = self._pnp_pose_composer.get_T_g_to_q(gate_pos_np)
+        rospy.loginfo(f"Gate ID: {detection.gate_id}, "
+                      f"{'front' if detection.is_front else 'back'}, "
+                      f"Position: {detection.position.tolist()}")
 
-            rospy.loginfo(f"Gate ID: {gate_id}, Position: {gate_pos_quad}")
+        result = self._pnp_pose_composer.comp_quadrotor_pose(detection.gate_id, T_g_to_q)
+        quad_pos_world = result.quadrotor_pose_world[:3].tolist()
 
-            result = self._pnp_pose_composer.comp_quadrotor_pose(gate_id, T_g_to_q)
-            quad_pos_world = result.quadrotor_pose_world[:3].tolist()
-
-            self._handle_pnp_measurement(t, quad_pos_world)
-            return  # only one valid gate per message
+        self._handle_pnp_measurement(t, quad_pos_world)
 
     def _mocap_callback(self, msg: PoseStamped):
         t = msg.header.stamp.to_sec()
@@ -287,14 +333,21 @@ class KFNode:
         if self._bias_logger is None:
             return
         try:
-            _, _, b, _ = self._kf.get_state()
+            p, v, b, _ = self._kf.get_state()
             self._bias_logger.log(t, b)
+            # Log KF fused trajectory alongside bias
+            if self._kf_logger is not None:
+                self._kf_logger.write([t,
+                    p[0], p[1], p[2],
+                    v[0], v[1], v[2]])
         except Exception as e:
-            rospy.logerr(f"Failed to log bias: {e}")
+            rospy.logerr(f"Failed to log state: {e}")
 
     def stop_bias_logging(self):
-        if self._bias_logger is not None:
-            self._bias_logger.close()
+        for logger in (self._bias_logger, self._vio_logger,
+                       self._kf_logger, self._pnp_logger):
+            if logger is not None:
+                logger.close()
 
     # ------------------------------------------------------------------
     # Spin

@@ -1,3 +1,5 @@
-<node pkg="kf_vio_pnp" type="kf_node.py" name="kf_node" output="screen">
-  <rosparam file="$(find kf_vio_pnp)/config/kf_params.yaml" command="load" />
-</node>
+<launch>
+  <node pkg="kf_vio_pnp" type="kf_node.py" name="kf_node" output="screen">
+    <rosparam file="$(find kf_vio_pnp)/config/kf_params.yaml" command="load" />
+  </node>
+</launch>
