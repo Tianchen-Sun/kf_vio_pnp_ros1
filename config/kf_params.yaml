@@ -1,13 +1,18 @@
 # ---------------------------------------------------------------------------
-# Initial VIO-to-PnP frame alignment
-# vio_translation_rel_pnp: position of VIO origin expressed in PnP frame (m)
-# init_yaw_rad: yaw of VIO frame relative to PnP frame (rad)
+# Initial VIO-to-World frame alignment
+# vio_translation_rel_pnp: position of VIO origin expressed in World frame (m)
+# init_yaw_rad: yaw of VIO frame relative to World frame (rad)
 # ---------------------------------------------------------------------------
 init_pos_x: 0.00   # m
 init_pos_y: 0.00   # m
 init_pos_z: 0.0     # m
 init_yaw_rad: -0.0 # rad
 
+# ---------------------------------------------------------------------------
+# Gate scene CSV path (used by GateMap)
+# Relative paths are resolved from the package root (kf_vio_pnp_ros1/)
+# ---------------------------------------------------------------------------
+scene_csv_path: config/scene.csv
 
 # ---------------------------------------------------------------------------
 # Kalman filter noise parameters
@@ -46,8 +51,4 @@ mocap_freq: 10.0
 mocap_available_duration: 2.0
 mocap_unavailable_duration: 10.0
 
-# ---------------------------------------------------------------------------
-# Gate scene CSV path (used by GateMap)
-# Relative paths are resolved from the package root (kf_vio_pnp_ros1/)
-# ---------------------------------------------------------------------------
-scene_csv_path: config/scene.csv
+
