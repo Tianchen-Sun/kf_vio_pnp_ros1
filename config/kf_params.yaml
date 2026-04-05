@@ -1,4 +1,15 @@
 # ---------------------------------------------------------------------------
+# Initial VIO-to-PnP frame alignment
+# vio_translation_rel_pnp: position of VIO origin expressed in PnP frame (m)
+# init_yaw_rad: yaw of VIO frame relative to PnP frame (rad)
+# ---------------------------------------------------------------------------
+init_pos_x: 0.00   # m
+init_pos_y: 0.00   # m
+init_pos_z: 0.0     # m
+init_yaw_rad: -0.0 # rad
+
+
+# ---------------------------------------------------------------------------
 # Kalman filter noise parameters
 # ---------------------------------------------------------------------------
 
@@ -20,16 +31,6 @@ pnp_pos_std: 0.03   # m
 # ---------------------------------------------------------------------------
 vio_delay_compensation: true
 vio_delay_sec: 0.0667   # seconds
-
-# ---------------------------------------------------------------------------
-# Initial VIO-to-PnP frame alignment
-# vio_translation_rel_pnp: position of VIO origin expressed in PnP frame (m)
-# init_yaw_rad: yaw of VIO frame relative to PnP frame (rad)
-# ---------------------------------------------------------------------------
-init_pos_x: 0.00   # m
-init_pos_y: 0.00   # m
-init_pos_z: 0.0     # m
-init_yaw_rad: -0.0 # rad
 
 # ---------------------------------------------------------------------------
 # MoCap gating options
