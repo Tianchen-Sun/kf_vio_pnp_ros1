@@ -15,13 +15,22 @@ init_yaw_rad: -0.0 # rad
 scene_csv_path: config/scene.csv
 
 # ---------------------------------------------------------------------------
-# Kalman filter noise parameters
+# Kalman filter noise parameters  (EKF full rigid-body)
 # ---------------------------------------------------------------------------
 
-# IMU acceleration measurement noise std (m/s^2)
+# IMU accelerometer measurement noise std (m/s^2)
 imu_accel_noise_std: 0.05
 
-# VIO position bias random-walk std (m/s per sqrt(s))
+# IMU gyroscope measurement noise std (rad/s)
+imu_gyro_noise_std: 0.005
+
+# Accelerometer bias random-walk std (m/s^2 per sqrt(s))
+accel_bias_rw_std: 0.001
+
+# Gyroscope bias random-walk std (rad/s per sqrt(s))
+gyro_bias_rw_std: 0.0001
+
+# (legacy – kept for back-compat, not used by EKF)
 vio_bias_rw_std: 0.005
 
 # VIO observation noise

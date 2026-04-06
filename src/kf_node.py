@@ -12,6 +12,7 @@ from datetime import datetime
 import rospy
 from geometry_msgs.msg import PoseStamped, PoseArray
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import Imu
 
 from kf_vio_pnp import VioAugmentedKalmanFilter, KFConfig
 from transform import Transform
@@ -134,8 +135,10 @@ class KFNode:
 
         # --- Kalman filter config ---
         cfg = KFConfig(
-            imu_accel_noise_std=rospy.get_param('~imu_accel_noise_std', 0.2),
-            vio_bias_rw_std=rospy.get_param('~vio_bias_rw_std', 0.01),
+            imu_accel_noise_std=rospy.get_param('~imu_accel_noise_std', 0.1),
+            imu_gyro_noise_std=rospy.get_param('~imu_gyro_noise_std', 0.01),
+            accel_bias_rw_std=rospy.get_param('~accel_bias_rw_std', 0.001),
+            gyro_bias_rw_std=rospy.get_param('~gyro_bias_rw_std', 0.0001),
             vio_pos_std=rospy.get_param('~vio_pos_std', 0.20),
             vio_vel_std=rospy.get_param('~vio_vel_std', 0.30),
             pnp_pos_std=rospy.get_param('~pnp_pos_std', 0.03),
@@ -175,20 +178,22 @@ class KFNode:
         self._kf = VioAugmentedKalmanFilter(cfg)
         self._initialized = False
         self._init_vel = [0.0, 0.0, 0.0]
-        self._quat = np.array([0.0, 0.0, 0.0, 1.0], dtype=float)
-        self._last_accel_meas = np.zeros(3, dtype=float)
+        self._quat = np.array([0.0, 0.0, 0.0, 1.0], dtype=float)  # [x,y,z,w] ROS order
+        self._last_accel_meas = np.array([0.0, 0.0, 9.81], dtype=float)  # body frame, m/s²
+        self._last_gyro_meas  = np.zeros(3, dtype=float)                  # body frame, rad/s
         self._bias_logger = None
         self._vio_logger  = None  # raw VIO trajectory (transformed to PnP frame)
         self._kf_logger   = None  # KF fused trajectory
         self._pnp_logger  = None  # PnP detections in world frame
 
         # --- Subscribers ---
-        rospy.Subscriber('/d2vins/odometry', Odometry, self._vio_callback, queue_size=10)
-        self._gate_pose_sub = rospy.Subscriber('/gate_pose/pose', PoseArray, self._gate_pose_callback, queue_size=10)
-        self._mocap_sub     = rospy.Subscriber('/mavros/vision_pose/pose', PoseStamped, self._mocap_callback, queue_size=10)
+        rospy.Subscriber('/d2vins/odometry', Odometry, self._vio_callback, queue_size=1)
+        rospy.Subscriber('/mavros/imu/data_raw', Imu, self._imu_callback, queue_size=5)
+        self._gate_pose_sub = rospy.Subscriber('/gate_pose/pose', PoseArray, self._gate_pose_callback, queue_size=1)
+        self._mocap_sub     = rospy.Subscriber('/mavros/vision_pose/pose', PoseStamped, self._mocap_callback, queue_size=1)
 
         # --- Publisher ---
-        self._pub_fused = rospy.Publisher('/kf_vio_pnp/odometry', Odometry, queue_size=10)
+        self._pub_fused = rospy.Publisher('/kf_vio_pnp/odometry', Odometry, queue_size=1)
 
         rospy.loginfo("KF Node initialized")
         rospy.loginfo(f"Rotation matrix VIO->PnP:\n{self._transform.R_vio_to_pnp}")
@@ -197,8 +202,10 @@ class KFNode:
     # Initialisation helpers
     # ------------------------------------------------------------------
 
-    def _init_filter(self, t, pos, vel):
-        self._kf.init_state(pos=pos, vel=vel, t0=t)
+    def _init_filter(self, t, pos, vel, quat_wxyz=None):
+        if quat_wxyz is None:
+            quat_wxyz = (1.0, 0.0, 0.0, 0.0)
+        self._kf.init_state(pos=pos, vel=vel, quat_wxyz=quat_wxyz, t0=t)
         self._initialized = True
         self._setup_bias_logger(t)
         rospy.loginfo(f"Kalman filter initialised at t={t:.3f}s")
@@ -222,6 +229,35 @@ class KFNode:
     # Subscriber callbacks
     # ------------------------------------------------------------------
 
+    def _imu_callback(self, msg: Imu):
+        """
+        Raw IMU callback from /mavros/imu/data_raw.
+        Stores the latest accelerometer and gyroscope readings (body frame).
+        Also drives the EKF propagation step so orientation is kept up-to-date
+        between VIO / PnP measurement updates.
+        """
+        t = msg.header.stamp.to_sec()
+        accel = np.array([
+            msg.linear_acceleration.x,
+            msg.linear_acceleration.y,
+            msg.linear_acceleration.z,
+        ], dtype=float)
+        gyro = np.array([
+            msg.angular_velocity.x,
+            msg.angular_velocity.y,
+            msg.angular_velocity.z,
+        ], dtype=float)
+        self._last_accel_meas = accel
+        self._last_gyro_meas  = gyro
+
+        rospy.loginfo(f"imu_callback at t={t:.3f}s: accel={accel}, gyro={gyro}")
+        
+        if self._initialized:
+            self._kf.propagate_imu(t, accel, gyro)
+            # Update stored quaternion from EKF (EKF uses [qw,qx,qy,qz]; ROS uses [x,y,z,w])
+            q_wxyz = self._kf.get_quaternion()
+            self._quat = np.array([q_wxyz[1], q_wxyz[2], q_wxyz[3], q_wxyz[0]], dtype=float)
+
     def _vio_callback(self, msg: Odometry):
         t = msg.header.stamp.to_sec()
         pos = [msg.pose.pose.position.x,
@@ -238,7 +274,10 @@ class KFNode:
         self._quat = self._transform.quaternion_vio_to_pnp(q_vio)
 
         if not self._initialized:
-            self._init_filter(t, pos_tf, vel_tf)
+            # Seed orientation from VIO quaternion at init time
+            q_init_wxyz = np.array([self._quat[3], self._quat[0],
+                                    self._quat[1], self._quat[2]], dtype=float)
+            self._init_filter(t, pos_tf, vel_tf, quat_wxyz=q_init_wxyz)
             return
 
         # Log raw VIO position (in PnP/world frame)
@@ -248,7 +287,9 @@ class KFNode:
                 vel_tf[0], vel_tf[1], vel_tf[2]])
 
         event = {"t": t, "type": "vio", "pos": pos_tf, "vel": vel_tf}
-        self._kf.process_event(event, accel_meas=self._last_accel_meas)
+        self._kf.process_event(event,
+            accel_meas=self._last_accel_meas,
+            gyro_meas=self._last_gyro_meas)
         self._publish_fused(t)
         self._log_bias(t)
 
@@ -261,7 +302,9 @@ class KFNode:
         if self._pnp_logger is not None:
             self._pnp_logger.write([t, pos[0], pos[1], pos[2]])
         event = {"t": t, "type": "pnp", "pos": pos}
-        self._kf.process_event(event, accel_meas=self._last_accel_meas)
+        self._kf.process_event(event,
+            accel_meas=self._last_accel_meas,
+            gyro_meas=self._last_gyro_meas)
         self._publish_fused(t)
         self._log_bias(t)
 
