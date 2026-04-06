@@ -72,7 +72,7 @@ class GateDetection:
     """Decoded gate detection from a one-hot PoseArray message."""
     gate_id: int            # array index == logical gate index
     position: np.ndarray    # [x, y, z] in quadrotor frame
-
+    is_front: bool 
 
 class GatePoseArrayDecoder:
     """

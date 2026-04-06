@@ -234,7 +234,7 @@ class KFNode:
 
         self._yaw = self._transform.quaternion_to_yaw([ori.x, ori.y, ori.z, ori.w])
         pos_tf = self._transform.vio_to_pnp(pos)
-        vel_tf = self._transform.vio_to_pnp(vel)
+        vel_tf = self._transform.vio_vector_to_pnp(vel)
         self._yaw = self._transform.yaw_vio_to_pnp(self._yaw)
 
         if not self._initialized:
@@ -280,6 +280,8 @@ class KFNode:
         T_g_to_q = self._pnp_pose_composer.get_T_g_to_q(detection.position)
 
         rospy.loginfo(f"Gate ID: {detection.gate_id}, "
+                      f"Is Front: {detection.is_front}, "
+                      f"{'front' if detection.is_front else 'back'}, "
                       f"Position: {detection.position.tolist()}")
 
         result = self._pnp_pose_composer.comp_quadrotor_pose(detection.gate_id, T_g_to_q)

@@ -53,6 +53,11 @@ class Transform:
         pos_pnp_relative = self.R_vio_to_pnp @ vio_pos
         pos_pnp = pos_pnp_relative + self.vio_translation_rel_pnp
         return pos_pnp
+
+    def vio_vector_to_pnp(self, vio_vector):
+        """Transform a free vector (e.g. velocity) from VIO to PnP frame."""
+        vec_vio = np.array(vio_vector, dtype=float)
+        return self.R_vio_to_pnp @ vec_vio
     
     def yaw_vio_to_pnp(self, yaw_vio):
         """Transform yaw angle from VIO frame to PnP frame"""
