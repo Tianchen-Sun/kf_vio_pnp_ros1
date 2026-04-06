@@ -33,9 +33,19 @@ gyro_bias_rw_std: 0.0001
 # (legacy – kept for back-compat, not used by EKF)
 vio_bias_rw_std: 0.005
 
+# ---------------------------------------------------------------------------
+# IMU Butterworth low-pass filter (2nd-order, applied before EKF propagation)
+# ---------------------------------------------------------------------------
+# Expected IMU publishing rate (Hz) – sets the Nyquist frequency
+imu_sample_hz: 200.0
+# Accelerometer cutoff frequency (Hz)
+imu_accel_cutoff_hz: 30.0
+# Gyroscope cutoff frequency (Hz)
+imu_gyro_cutoff_hz: 50.0
+
 # VIO observation noise
 vio_pos_std: 0.05   # m
-vio_vel_std: 0.80   # m/s
+vio_vel_std: 0.20   # m/s
 
 # PnP observation noise (more reliable position source)
 pnp_pos_std: 0.03   # m

@@ -116,6 +116,43 @@ class CsvLogger:
             rospy.logerr(f"Failed to close log {self._path}: {e}")
 
 
+class OnlineButterworthFilter:
+    """
+    Real-time 2nd-order (or N-th order) Butterworth low-pass filter.
+
+    Uses scipy's second-order sections (SOS) for numerical stability.
+    Filter state is initialised on the first sample to eliminate the
+    DC step-response transient at startup.
+    """
+
+    def __init__(self, cutoff_hz: float, sample_hz: float, order: int = 2, channels: int = 3):
+        from scipy.signal import butter, sosfilt_zi
+        nyq = sample_hz / 2.0
+        if cutoff_hz <= 0 or cutoff_hz >= nyq:
+            raise ValueError(
+                f"cutoff_hz ({cutoff_hz}) must be in (0, Nyquist={nyq})"
+            )
+        self._sos      = butter(order, cutoff_hz / nyq, btype='low', output='sos')
+        self._zi_proto = sosfilt_zi(self._sos)   # (n_sections, 2)
+        self._channels = channels
+        self._zi       = None   # initialised on first sample
+
+    def filter(self, x: np.ndarray) -> np.ndarray:
+        """Filter one sample vector and return the filtered vector."""
+        from scipy.signal import sosfilt
+        x = np.asarray(x, dtype=float)
+        if self._zi is None:
+            # Seed each channel's state to the first sample value
+            # so there is no startup step-response transient.
+            self._zi = [self._zi_proto.copy() * x[c]
+                        for c in range(self._channels)]
+        out = np.empty(self._channels, dtype=float)
+        for c in range(self._channels):
+            y, self._zi[c] = sosfilt(self._sos, [x[c]], zi=self._zi[c])
+            out[c] = y[0]
+        return out
+
+
 class KFNode:
     """
     ROS1 node that fuses VIO odometry and PnP pose estimates using
@@ -186,6 +223,13 @@ class KFNode:
         self._kf_logger   = None  # KF fused trajectory
         self._pnp_logger  = None  # PnP detections in world frame
 
+        # --- IMU Butterworth low-pass filters (2nd-order) ---
+        imu_sample_hz   = rospy.get_param('~imu_sample_hz',       200.0)
+        accel_cutoff_hz = rospy.get_param('~imu_accel_cutoff_hz',  30.0)
+        gyro_cutoff_hz  = rospy.get_param('~imu_gyro_cutoff_hz',   50.0)
+        self._accel_filter = OnlineButterworthFilter(accel_cutoff_hz, imu_sample_hz)
+        self._gyro_filter  = OnlineButterworthFilter(gyro_cutoff_hz,  imu_sample_hz)
+
         # --- Subscribers ---
         rospy.Subscriber('/d2vins/odometry', Odometry, self._vio_callback, queue_size=1)
         rospy.Subscriber('/mavros/imu/data_raw', Imu, self._imu_callback, queue_size=5)
@@ -237,26 +281,27 @@ class KFNode:
         between VIO / PnP measurement updates.
         """
         t = msg.header.stamp.to_sec()
-        accel = np.array([
+        raw_accel = np.array([
             msg.linear_acceleration.x,
             msg.linear_acceleration.y,
             msg.linear_acceleration.z,
         ], dtype=float)
-        gyro = np.array([
+        raw_gyro = np.array([
             msg.angular_velocity.x,
             msg.angular_velocity.y,
             msg.angular_velocity.z,
         ], dtype=float)
+
+        # Apply Butterworth low-pass filters
+        accel = self._accel_filter.filter(raw_accel)
+        gyro  = self._gyro_filter.filter(raw_gyro)
+
         self._last_accel_meas = accel
         self._last_gyro_meas  = gyro
 
-        # rospy.loginfo(f"imu_callback at t={t:.3f}s: accel={accel}, gyro={gyro}")
-        
         if self._initialized:
+            # IMU drives all EKF propagation at the raw IMU rate
             self._kf.propagate_imu(t, accel, gyro)
-            # Update stored quaternion from EKF (EKF uses [qw,qx,qy,qz]; ROS uses [x,y,z,w])
-            q_wxyz = self._kf.get_quaternion()
-            self._quat = np.array([q_wxyz[1], q_wxyz[2], q_wxyz[3], q_wxyz[0]], dtype=float)
 
     def _vio_callback(self, msg: Odometry):
         t = msg.header.stamp.to_sec()
@@ -286,10 +331,8 @@ class KFNode:
                 pos_tf[0], pos_tf[1], pos_tf[2],
                 vel_tf[0], vel_tf[1], vel_tf[2]])
 
-        event = {"t": t, "type": "vio", "pos": pos_tf, "vel": vel_tf}
-        self._kf.process_event(event,
-            accel_meas=self._last_accel_meas,
-            gyro_meas=self._last_gyro_meas)
+        # Measurement update only — propagation is strictly driven by _imu_callback
+        self._kf.update_vio(pos_tf, vel_tf)
         self._publish_fused(t)
         self._log_bias(t)
 
@@ -301,10 +344,8 @@ class KFNode:
         # Log PnP detection in world frame
         if self._pnp_logger is not None:
             self._pnp_logger.write([t, pos[0], pos[1], pos[2]])
-        event = {"t": t, "type": "pnp", "pos": pos}
-        self._kf.process_event(event,
-            accel_meas=self._last_accel_meas,
-            gyro_meas=self._last_gyro_meas)
+        # Measurement update only — propagation is strictly driven by _imu_callback
+        self._kf.update_pnp(pos)
         self._publish_fused(t)
         self._log_bias(t)
 
@@ -347,7 +388,7 @@ class KFNode:
 
     def _publish_fused(self, t):
         p, v, b, P = self._kf.get_state()
-        quat = self._quat
+        q_wxyz = self._kf.get_quaternion()   # [qw, qx, qy, qz] from EKF
 
         msg = Odometry()
         msg.header.stamp = rospy.Time.from_sec(t)
@@ -358,10 +399,10 @@ class KFNode:
         msg.pose.pose.position.y = float(p[1])
         msg.pose.pose.position.z = float(p[2])
 
-        msg.pose.pose.orientation.x = float(quat[0])
-        msg.pose.pose.orientation.y = float(quat[1])
-        msg.pose.pose.orientation.z = float(quat[2])
-        msg.pose.pose.orientation.w = float(quat[3])
+        msg.pose.pose.orientation.x = float(q_wxyz[1])   # qx
+        msg.pose.pose.orientation.y = float(q_wxyz[2])   # qy
+        msg.pose.pose.orientation.z = float(q_wxyz[3])   # qz
+        msg.pose.pose.orientation.w = float(q_wxyz[0])   # qw
 
         msg.twist.twist.linear.x = float(v[0])
         msg.twist.twist.linear.y = float(v[1])

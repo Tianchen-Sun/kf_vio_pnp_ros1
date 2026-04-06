@@ -257,6 +257,14 @@ class VioAugmentedKalmanFilter:
         """Return current orientation quaternion [qw, qx, qy, qz]."""
         return self.x[6:10].copy()
 
+    def update_vio(self, vio_pos, vio_vel):
+        """Measurement update with VIO pos+vel – no propagation step."""
+        self._update_vio(vio_pos, vio_vel)
+
+    def update_pnp(self, pnp_pos):
+        """Measurement update with PnP position – no propagation step."""
+        self._update_pnp(pnp_pos)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
