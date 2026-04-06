@@ -45,7 +45,7 @@ imu_gyro_cutoff_hz: 50.0
 
 # VIO observation noise
 vio_pos_std: 0.05   # m
-vio_vel_std: 0.20   # m/s
+vio_vel_std: 0.05   # m/s
 
 # PnP observation noise (more reliable position source)
 pnp_pos_std: 0.03   # m
