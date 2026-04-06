@@ -1,0 +1,5 @@
+<launch>
+  <node pkg="kf_vio_pnp" type="kf_node_cpp" name="kf_node" output="screen">
+    <rosparam file="$(find kf_vio_pnp)/config/kf_params.yaml" command="load" />
+  </node>
+</launch>

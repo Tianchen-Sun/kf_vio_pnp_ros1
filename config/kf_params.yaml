@@ -48,13 +48,20 @@ vio_pos_std: 0.05   # m
 vio_vel_std: 0.05   # m/s
 
 # PnP observation noise (more reliable position source)
-pnp_pos_std: 0.03   # m
+pnp_pos_std: 0.10   # m
 
 # ---------------------------------------------------------------------------
 # VIO delay compensation
 # ---------------------------------------------------------------------------
 vio_delay_compensation: true
 vio_delay_sec: 0.0667   # seconds
+
+# ---------------------------------------------------------------------------
+# Gate pose (PnP) delay compensation
+# The gate pose message arrives with a processing delay; subtract this from
+# the header timestamp before aligning with the IMU buffer.
+# ---------------------------------------------------------------------------
+gate_pose_delay_sec: 0.1   # seconds (default 100 ms)
 
 # ---------------------------------------------------------------------------
 # MoCap gating options
