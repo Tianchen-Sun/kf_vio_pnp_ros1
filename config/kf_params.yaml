@@ -32,7 +32,7 @@ gyro_bias_rw_std: 0.0001
 
 # VIO position bias random-walk std (m per sqrt(s))
 # Small value = treat VIO bias as nearly constant, large = allow fast drift
-vio_pos_bias_rw_std: 0.1
+vio_pos_bias_rw_std: 0.01
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ imu_gyro_cutoff_hz: 50.0
 
 # VIO observation noise
 vio_pos_std: 0.01   # m
-vio_vel_std: 0.01   # m/s
+vio_vel_std: 0.10   # m/s # not accurate
 vio_quat_std: 0.001  # rad  (orientation quaternion noise, fused with pos+vel in 9-DOF update)
 
 # PnP observation noise (more reliable position source)
