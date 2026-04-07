@@ -26,6 +26,7 @@ struct KFConfig {
 
     double vio_pos_std          = 0.20;   // m
     double vio_vel_std          = 0.30;   // m/s
+    double vio_quat_std         = 0.05;   // rad  (orientation measurement noise)
     double pnp_pos_std          = 0.03;   // m
 
     bool   vio_delay_compensation = false;
@@ -208,6 +209,55 @@ public:
         R_cov.diagonal() << sp*sp, sp*sp, sp*sp, sv*sv, sv*sv, sv*sv;
 
         const Eigen::Matrix<double, 6, 1> innov = (z - h_x).eval();
+        measurementUpdate(innov, H, R_cov);
+    }
+
+    // 9-DOF VIO update: position + velocity + orientation quaternion
+    // The quaternion innovation is computed as the rotation-vector difference
+    // δθ ≈ 2·Im(q_est⁻¹ ⊗ q_meas) and fused in a single EKF update step.
+    void updateVioWithOrientation(const Vec3& vio_pos,
+                                   const Vec3& vio_vel,
+                                   const Vec4& vio_quat_wxyz)
+    {
+        // --- Orientation innovation (computed before state update) ---
+        const Vec4 q_est = x_.segment<4>(6);  // [qw, qx, qy, qz]
+        // q_est_inv = conjugate (unit quaternion inverse)
+        const Vec4 q_est_inv(q_est(0), -q_est(1), -q_est(2), -q_est(3));
+        const Vec4 q_err = quatNorm(quatMult(q_est_inv, vio_quat_wxyz));
+        // Small-angle rotation vector; flip sign if scalar part is negative
+        // to stay on the shorter arc
+        const Eigen::Matrix<double,3,1> y_theta =
+            (q_err(0) >= 0.0)
+                ? (2.0 * q_err.segment<3>(1)).eval()
+                : (-2.0 * q_err.segment<3>(1)).eval();
+
+        // --- Build 9-DOF innovation [δp, δv, δθ] ---
+        Eigen::Matrix<double,9,1> y;
+        y << (vio_pos - x_.segment<3>(0)).eval(),
+             (vio_vel - x_.segment<3>(3)).eval(),
+             y_theta;
+
+        Eigen::Matrix<double,9,15> H;
+        H.setZero();
+        H.block<3,3>(0,0) = Mat3::Identity();   // ∂pos_obs/∂δp
+        H.block<3,3>(3,3) = Mat3::Identity();   // ∂vel_obs/∂δv
+        H.block<3,3>(6,6) = Mat3::Identity();   // ∂θ_obs/∂δθ  (right-pert ESKF)
+
+        double sp = cfg_.vio_pos_std;
+        double sv = cfg_.vio_vel_std;
+        double sq = cfg_.vio_quat_std;
+        if (cfg_.vio_delay_compensation && cfg_.vio_delay_sec > 0.0) {
+            const double f = std::sqrt(1.0 + cfg_.vio_delay_sec * 2.0);
+            sp *= f;  sv *= f; sq *= f;
+        }
+        Eigen::Matrix<double,9,9> R_cov;
+        R_cov.setZero();
+        R_cov.diagonal() <<
+            sp*sp, sp*sp, sp*sp,
+            sv*sv, sv*sv, sv*sv,
+            sq*sq, sq*sq, sq*sq;
+
+        const Eigen::Matrix<double,9,1> innov = y.eval();
         measurementUpdate(innov, H, R_cov);
     }
 

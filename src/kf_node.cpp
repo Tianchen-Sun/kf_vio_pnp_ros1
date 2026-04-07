@@ -150,19 +150,19 @@ public:
               0,  0, 1;
     }
 
-    Eigen::Vector3d viaToPnp(const Eigen::Vector3d& p) const
+    Eigen::Vector3d vioPositionToWorld(const Eigen::Vector3d& p) const
     {
         return R_ * p + t_;
     }
 
-    Eigen::Vector3d viaVectorToPnp(const Eigen::Vector3d& v) const
+    Eigen::Vector3d vioVelocityToWorld(const Eigen::Vector3d& v) const
     {
         return R_ * v;
     }
 
     // Transform VIO quaternion [x,y,z,w] → PnP quaternion [x,y,z,w]
     // The yaw offset is applied as a left-multiplication: q_pnp = q_yaw ⊗ q_vio
-    Eigen::Vector4d vioQuatToPnp(const Eigen::Vector4d& q_xyzw_vio) const
+    Eigen::Vector4d vioQuatToWorld(const Eigen::Vector4d& q_xyzw_vio) const
     {
         // Convert VIO quat from ROS [x,y,z,w] to internal [qw,qx,qy,qz]
         Vec4 qv(q_xyzw_vio(3), q_xyzw_vio(0), q_xyzw_vio(1), q_xyzw_vio(2));
@@ -265,6 +265,7 @@ public:
         cfg.gyro_bias_rw_std     = nh.param("gyro_bias_rw_std",     0.0001);
         cfg.vio_pos_std          = nh.param("vio_pos_std",          0.20);
         cfg.vio_vel_std          = nh.param("vio_vel_std",          0.30);
+        cfg.vio_quat_std         = nh.param("vio_quat_std",         0.05);
         cfg.pnp_pos_std          = nh.param("pnp_pos_std",          0.03);
         cfg.vio_delay_compensation = nh.param("vio_delay_compensation", true);
         cfg.vio_delay_sec          = nh.param("vio_delay_sec",          0.05);
@@ -391,11 +392,10 @@ private:
         Eigen::Vector4d q_vio_xyzw(ori.x, ori.y, ori.z, ori.w);
 
         // Transform to world frame
-        const Eigen::Vector3d pos_w = transform_->viaToPnp(pos_vio);
-        const Eigen::Vector3d vel_w = transform_->viaVectorToPnp(vel_vio);
+        const Eigen::Vector3d pos_w = transform_->vioPositionToWorld(pos_vio);
+        const Eigen::Vector3d vel_w = transform_->vioVelocityToWorld(vel_vio);
         // q_wxyz in internal convention
-        const Vec4 q_wxyz_w         = transform_->vioQuatToPnp(q_vio_xyzw);
-
+        const Vec4 q_wxyz_w         = transform_->vioQuatToWorld(q_vio_xyzw);
         std::lock_guard<std::mutex> lk(ekf_mutex_);
 
         if (!kf_.isInitialized()) {
@@ -407,14 +407,15 @@ private:
         // ── Strict time alignment: propagate EKF to exactly t ──
         drainBufferTo(t);
 
-        // ── Measurement update ──────────────────────────────────
-        kf_.updateVio(pos_w, vel_w);
+        // ── Measurement update: position + velocity + orientation ──
+        kf_.updateVioWithOrientation(pos_w, vel_w, q_wxyz_w);
 
-        // VIO logger (world-frame position)
+        // VIO logger (world-frame position, velocity, orientation)
         if (log_vio_) {
             log_vio_->write(t,
                 pos_w(0), pos_w(1), pos_w(2),
-                vel_w(0), vel_w(1), vel_w(2));
+                vel_w(0), vel_w(1), vel_w(2),
+                q_wxyz_w(0), q_wxyz_w(1), q_wxyz_w(2), q_wxyz_w(3));  // qw,qx,qy,qz
         }
 
         publishFused(t);
@@ -526,10 +527,10 @@ private:
                 std::vector<std::string>{"timestamp","bias_x","bias_y","bias_z"});
             log_vio_ = std::make_unique<CsvLogger>(
                 log_dir_, "vio_traj",
-                std::vector<std::string>{"timestamp","px","py","pz","vx","vy","vz"});
+                std::vector<std::string>{"timestamp","px","py","pz","vx","vy","vz","qw","qx","qy","qz"});
             log_kf_ = std::make_unique<CsvLogger>(
                 log_dir_, "kf_traj",
-                std::vector<std::string>{"timestamp","px","py","pz","vx","vy","vz"});
+                std::vector<std::string>{"timestamp","px","py","pz","vx","vy","vz","qw","qx","qy","qz"});
             log_pnp_ = std::make_unique<CsvLogger>(
                 log_dir_, "pnp_detections",
                 std::vector<std::string>{"timestamp","px","py","pz"});
@@ -578,12 +579,14 @@ private:
         const Vec3 p  = kf_.getPosition();
         const Vec3 v  = kf_.getVelocity();
         const Vec3 ba = kf_.getAccelBias();
+        const Vec4 q  = kf_.getQuaternion();  // [qw, qx, qy, qz]
 
         if (log_bias_)
             log_bias_->write(t, ba(0), ba(1), ba(2));
 
         if (log_kf_)
-            log_kf_->write(t, p(0), p(1), p(2), v(0), v(1), v(2));
+            log_kf_->write(t, p(0), p(1), p(2), v(0), v(1), v(2),
+                           q(0), q(1), q(2), q(3));  // qw, qx, qy, qz
     }
 
     // ──────────────────────────────────────────────────────────

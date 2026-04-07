@@ -2,14 +2,15 @@
 """
 vis/traj.py  –  Trajectory visualisation for kf_vio_pnp
 
-Reads the three CSV logs produced by kf_node.py:
-  - vio_traj_*.csv        : raw VIO positions & velocities (in PnP/world frame)
-  - kf_traj_*.csv         : KF-fused positions & velocities
+Reads the three CSV logs produced by kf_node.py / kf_node_cpp:
+  - vio_traj_*.csv        : raw VIO positions, velocities, quaternion (world frame)
+  - kf_traj_*.csv         : KF-fused positions, velocities, quaternion
   - pnp_detections_*.csv  : PnP-derived quadrotor positions in world frame
 
 Plots
-  1. 2-D XY trajectory  (VIO + KF, coloured by speed; PnP as crosses)
-  2. 3-D trajectory     (same components)
+  Figure 1 ─ left  : 2-D XY trajectory  (VIO + KF, coloured by speed; PnP as crosses)
+           ─ right : 3-D trajectory     (same components)
+  Figure 2  : Euler-angle comparison  (VIO vs KF fused)  – roll / pitch / yaw vs time
 """
 
 import argparse
@@ -41,15 +42,54 @@ def _latest_csv(log_dir: str, prefix: str) -> str:
 
 
 def load_traj(path: str) -> pd.DataFrame:
-    """Load a trajectory CSV (columns: timestamp, px, py, pz, vx, vy, vz)."""
+    """Load a trajectory CSV.
+
+    Required columns : timestamp, px, py, pz, vx, vy, vz
+    Optional columns : qw, qx, qy, qz  (present in logs from kf_node_cpp)
+    """
     df = pd.read_csv(path)
     df['speed'] = np.sqrt(df['vx']**2 + df['vy']**2 + df['vz']**2)
+    # Add quaternion columns with identity defaults when absent (old log format)
+    for col, default in [('qw', 1.0), ('qx', 0.0), ('qy', 0.0), ('qz', 0.0)]:
+        if col not in df.columns:
+            df[col] = default
     return df
 
 
 def load_pnp(path: str) -> pd.DataFrame:
     """Load a PnP detection CSV (columns: timestamp, px, py, pz)."""
     return pd.read_csv(path)
+
+
+# ---------------------------------------------------------------------------
+# Quaternion → Euler angles (ZYX / aerospace convention)
+# ---------------------------------------------------------------------------
+
+def quat_to_euler_deg(qw: np.ndarray,
+                      qx: np.ndarray,
+                      qy: np.ndarray,
+                      qz: np.ndarray):
+    """Convert quaternion arrays [qw,qx,qy,qz] to roll/pitch/yaw in degrees.
+
+    Convention: ZYX extrinsic (yaw → pitch → roll), i.e. intrinsic XYZ.
+    Each input may be a scalar or 1-D numpy array.
+    Returns (roll_deg, pitch_deg, yaw_deg) all in degrees.
+    """
+    # Roll (rotation about X)
+    sinr = 2.0 * (qw * qx + qy * qz)
+    cosr = 1.0 - 2.0 * (qx * qx + qy * qy)
+    roll = np.degrees(np.arctan2(sinr, cosr))
+
+    # Pitch (rotation about Y)  – clamp to avoid arcsin domain errors
+    sinp = np.clip(2.0 * (qw * qy - qz * qx), -1.0, 1.0)
+    pitch = np.degrees(np.arcsin(sinp))
+
+    # Yaw (rotation about Z)
+    siny = 2.0 * (qw * qz + qx * qy)
+    cosy = 1.0 - 2.0 * (qy * qy + qz * qz)
+    yaw = np.degrees(np.arctan2(siny, cosy))
+
+    return roll, pitch, yaw
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +115,48 @@ def _coloured_line_3d(ax, x, y, z, colours):
     for i in range(len(x) - 1):
         ax.plot(x[i:i+2], y[i:i+2], z[i:i+2],
                 color=colours[i], linewidth=1.2, alpha=0.85)
+
+
+# ---------------------------------------------------------------------------
+# Euler-angle comparison plot
+# ---------------------------------------------------------------------------
+
+def plot_euler(axes, vio: pd.DataFrame, kf: pd.DataFrame):
+    """Plot roll / pitch / yaw comparison (VIO vs KF fused) against time.
+
+    *axes* must be an iterable of 3 Axes objects (one per angle).
+    Time axis is seconds elapsed from the start of the VIO log.
+    Angles are unwrapped to avoid ±180° discontinuities.
+    """
+    # Common zero reference so both series start at t=0 s
+    t0 = min(vio['timestamp'].iloc[0], kf['timestamp'].iloc[0])
+
+    vio_x = np.arange(len(vio))
+    kf_x  = np.arange(len(kf))
+
+    vio_roll_r, vio_pitch_r, vio_yaw_r = quat_to_euler_deg(
+        vio['qw'].values, vio['qx'].values, vio['qy'].values, vio['qz'].values)
+    kf_roll_r,  kf_pitch_r,  kf_yaw_r  = quat_to_euler_deg(
+        kf['qw'].values,  kf['qx'].values,  kf['qy'].values,  kf['qz'].values)
+
+    # Unwrap each angle series to remove ±180° wrap-around discontinuities
+    def unwrap_deg(arr):
+        return np.degrees(np.unwrap(np.radians(arr)))
+
+    vio_data = [unwrap_deg(vio_roll_r),  unwrap_deg(vio_pitch_r),  unwrap_deg(vio_yaw_r)]
+    kf_data  = [unwrap_deg(kf_roll_r),   unwrap_deg(kf_pitch_r),   unwrap_deg(kf_yaw_r)]
+    titles   = ['Roll', 'Pitch', 'Yaw']
+
+    for i, (ax, title, vd, kd) in enumerate(zip(axes, titles, vio_data, kf_data)):
+        ax.plot(vio_x, vd, color='tab:blue', lw=1.2, alpha=0.85, label='VIO (raw)')
+        ax.plot(kf_x,  kd, color='tab:red',  lw=1.2, alpha=0.85, label='KF (fused)')
+        ax.set_title(title, fontsize=11)
+        ax.set_ylabel('rad')
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
+        # Only label the x-axis on the bottom subplot
+        if i == len(titles) - 1:
+            ax.set_xlabel('Sample index')
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +289,7 @@ def main():
     print(f"KF  trajectory : {kf_path}   ({len(kf)} samples)")
 
     # -----------------------------------------------------------------------
-    # Figure layout: 2-D left, 3-D right
+    # Figure 1: 2-D left, 3-D right
     # -----------------------------------------------------------------------
     fig = plt.figure(figsize=(16, 7))
     ax2d = fig.add_subplot(1, 2, 1)
@@ -218,6 +300,16 @@ def main():
 
     plt.suptitle('kf_vio_pnp Trajectory Visualisation', fontsize=14, fontweight='bold')
     plt.tight_layout()
+
+    # -----------------------------------------------------------------------
+    # Figure 2: Euler-angle comparison
+    # -----------------------------------------------------------------------
+    fig2, euler_axes = plt.subplots(3, 1, figsize=(14, 8), sharex=True)
+    plot_euler(euler_axes, vio, kf)
+    fig2.suptitle('VIO vs KF Fused Orientation (Euler angles, ZYX convention)',
+                  fontsize=13, fontweight='bold')
+    fig2.tight_layout(rect=[0, 0, 1, 0.96])  # leave room for suptitle
+
     plt.show()
 
 
