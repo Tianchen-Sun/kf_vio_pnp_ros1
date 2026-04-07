@@ -267,6 +267,7 @@ public:
         cfg.vio_vel_std          = nh.param("vio_vel_std",          0.30);
         cfg.vio_quat_std         = nh.param("vio_quat_std",         0.05);
         cfg.pnp_pos_std          = nh.param("pnp_pos_std",          0.03);
+        cfg.pnp_quat_std         = nh.param("pnp_quat_std",         0.10);
         cfg.vio_delay_compensation  = nh.param("vio_delay_compensation",  true);
         cfg.vio_delay_sec           = nh.param("vio_delay_sec",           0.05);
         cfg.vio_pos_bias_rw_std     = nh.param("vio_pos_bias_rw_std",     0.001);
@@ -441,10 +442,13 @@ private:
             det.gate_id, det.is_front ? "front" : "back",
             det.position(0), det.position(1), det.position(2), t_actual);
 
-        const Eigen::Matrix4d T_g_to_q = PnPPoseCompose::buildTgToQ(det.position);
-        const Eigen::Vector3d quad_pos  = pnp_compose_->computeQuadPosWorld(det.gate_id, T_g_to_q);
+        // Build T_g_to_q with full rotation from PnP detection
+        const Eigen::Matrix4d T_g_to_q = PnPPoseCompose::buildTgToQ(det.position, det.orientation);
+        // Compose to get quad pose (position + orientation) in world frame
+        const PnPPoseCompose::QuadPose qpose =
+            pnp_compose_->computeQuadPoseWorld(det.gate_id, T_g_to_q);
 
-        handlePnpMeasurement(t_actual, quad_pos);
+        handlePnpMeasurementWithOrientation(t_actual, qpose.position, qpose.orientation_wxyz);
     }
 
     // ──────────────────────────────────────────────────────────
@@ -462,7 +466,55 @@ private:
     }
 
     // ──────────────────────────────────────────────────────────
-    // Shared PnP measurement logic
+    // Shared PnP measurement logic (position + orientation, gate PnP path)
+    // ──────────────────────────────────────────────────────────
+    void handlePnpMeasurementWithOrientation(double t,
+                                              const Eigen::Vector3d& pos,
+                                              const Eigen::Vector4d& quat_wxyz)
+    {
+        std::lock_guard<std::mutex> lk(ekf_mutex_);
+
+        if (!kf_.isInitialized()) {
+            initFilter(t, pos, Eigen::Vector3d::Zero(), quat_wxyz);
+            drainBufferTo(t);
+            return;
+        }
+
+        drainBufferTo(t);
+
+        // ── Log orientation difference (EKF/VIO vs PnP-derived) ──
+        // Compute relative rotation: q_diff = q_ekf^-1 ⊗ q_pnp
+        // then convert to ZYX Euler angles in degrees for easy inspection.
+        {
+            const Vec4 q_ekf = kf_.getQuaternion();  // [qw, qx, qy, qz]
+            const Vec4 q_pnp = quat_wxyz;
+            // q_ekf^-1 * q_pnp
+            const double dw =  q_ekf(0)*q_pnp(0) + q_ekf(1)*q_pnp(1) + q_ekf(2)*q_pnp(2) + q_ekf(3)*q_pnp(3);
+            const double dx = -q_ekf(1)*q_pnp(0) + q_ekf(0)*q_pnp(1) - q_ekf(3)*q_pnp(2) + q_ekf(2)*q_pnp(3);
+            const double dy = -q_ekf(2)*q_pnp(0) + q_ekf(3)*q_pnp(1) + q_ekf(0)*q_pnp(2) - q_ekf(1)*q_pnp(3);
+            const double dz = -q_ekf(3)*q_pnp(0) - q_ekf(2)*q_pnp(1) + q_ekf(1)*q_pnp(2) + q_ekf(0)*q_pnp(3);
+            // ZYX Euler from q_diff: roll, pitch, yaw in degrees
+            const double roll_diff  = std::atan2(2*(dw*dx + dy*dz), 1 - 2*(dx*dx + dy*dy)) * 180.0 / M_PI;
+            const double pitch_diff = std::asin(std::max(-1.0, std::min(1.0, 2*(dw*dy - dz*dx)))) * 180.0 / M_PI;
+            const double yaw_diff   = std::atan2(2*(dw*dz + dx*dy), 1 - 2*(dy*dy + dz*dz)) * 180.0 / M_PI;
+            ROS_INFO_THROTTLE(0.5,
+                "PnP-vs-EKF orient diff [deg]:  roll=%.2f  pitch=%.2f  yaw=%.2f",
+                roll_diff, pitch_diff, yaw_diff);
+        }
+
+        const bool accepted = kf_.updatePnpWithOrientation(pos, quat_wxyz, pnp_gate_sigma_);
+
+        if (accepted) {
+            if (log_pnp_)
+                log_pnp_->write(t, pos(0), pos(1), pos(2));
+        } else {
+            ROS_WARN_THROTTLE(1.0, "PnP+orientation measurement rejected by Mahalanobis gate (sigma=%.1f)",
+                              pnp_gate_sigma_);
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // Shared PnP measurement logic (position-only, MoCap path)
     // ──────────────────────────────────────────────────────────
     void handlePnpMeasurement(double t, const Eigen::Vector3d& pos)
     {

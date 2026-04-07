@@ -125,9 +125,10 @@ private:
 // GateDetection  –  result of decoding a PoseArray
 // ---------------------------------------------------------------------------
 struct GateDetection {
-    int              gate_id;    // logical gate index (0-based)
-    Eigen::Vector3d  position;   // [x, y, z] in quadrotor (camera) frame
-    bool             is_front;   // true = drone approaching (even array index)
+    int              gate_id;     // logical gate index (0-based)
+    Eigen::Vector3d  position;    // gate centre in quadrotor (camera) frame  [x, y, z]
+    Eigen::Vector4d  orientation; // gate-to-quad rotation as quaternion [qw, qx, qy, qz]
+    bool             is_front;    // true = drone approaching (even array index)
 };
 
 // ---------------------------------------------------------------------------
@@ -155,6 +156,15 @@ public:
             det.gate_id  = static_cast<int>(i) / 2;
             det.is_front = (i % 2 == 0);
             det.position = Eigen::Vector3d(x, y, z);
+            // Read orientation quaternion from pose (R_gate_to_quad)
+            const double qw = poses[i].orientation.w;
+            const double qx = poses[i].orientation.x;
+            const double qy = poses[i].orientation.y;
+            const double qz = poses[i].orientation.z;
+            const double qn = std::sqrt(qw*qw + qx*qx + qy*qy + qz*qz);
+            det.orientation = (qn > 1e-10)
+                ? Eigen::Vector4d(qw/qn, qx/qn, qy/qn, qz/qn)
+                : Eigen::Vector4d(1.0, 0.0, 0.0, 0.0);  // fallback: identity
             return true;
         }
         return false;

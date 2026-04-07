@@ -32,8 +32,9 @@ struct KFConfig {
 
     double vio_pos_std           = 0.20;    // m
     double vio_vel_std           = 0.30;    // m/s
-    double vio_quat_std          = 0.05;    // rad  (orientation measurement noise)
+    double vio_quat_std          = 0.05;    // rad  (VIO orientation measurement noise)
     double pnp_pos_std           = 0.03;    // m
+    double pnp_quat_std          = 0.10;    // rad  (PnP orientation measurement noise)
 
     bool   vio_delay_compensation = false;
     double vio_delay_sec          = 0.0;
@@ -273,6 +274,50 @@ public:
             sq*sq, sq*sq, sq*sq;
 
         measurementUpdate(y.eval(), H, R_cov);
+    }
+
+    // 6-DOF PnP update: absolute position (unbiased anchor) + orientation
+    // Returns false if the position block is rejected by the Mahalanobis gate.
+    bool updatePnpWithOrientation(const Vec3& pnp_pos,
+                                   const Vec4& pnp_quat_wxyz,
+                                   double gate_sigma = 5.0)
+    {
+        // Position innovation (PnP = unbiased anchor, no b_vio correction)
+        const Eigen::Matrix<double,3,1> y_pos = (pnp_pos - x_.segment<3>(0)).eval();
+
+        // Orientation innovation: δθ ≈ 2·Im(q_est⁻¹ ⊗ q_meas)
+        const Vec4 q_est = x_.segment<4>(6);
+        const Vec4 q_est_inv(q_est(0), -q_est(1), -q_est(2), -q_est(3));
+        const Vec4 q_err = quatNorm(quatMult(q_est_inv, pnp_quat_wxyz));
+        const Eigen::Matrix<double,3,1> y_theta =
+            (q_err(0) >= 0.0)
+                ? (2.0 * q_err.segment<3>(1)).eval()
+                : (-2.0 * q_err.segment<3>(1)).eval();
+
+        Eigen::Matrix<double,6,1> y;
+        y << y_pos, y_theta;
+
+        Eigen::Matrix<double,6,N> H;
+        H.setZero();
+        H.block<3,3>(0, 0) = Mat3::Identity();   // ∂pos/∂δp  (no b_vio for PnP)
+        H.block<3,3>(3, 6) = Mat3::Identity();   // ∂θ/∂δθ
+
+        const double sp = cfg_.pnp_pos_std;
+        const double sq = cfg_.pnp_quat_std;
+        Eigen::Matrix<double,6,6> R_cov;
+        R_cov.setZero();
+        R_cov.diagonal() <<
+            sp*sp, sp*sp, sp*sp,
+            sq*sq, sq*sq, sq*sq;
+
+        // Mahalanobis gate on position block: S_pp = P_pp + R_pp
+        const Eigen::Matrix<double,3,3> Spp =
+            P_.topLeftCorner<3,3>() + R_cov.topLeftCorner<3,3>();
+        const double mahal_sq = y_pos.transpose() * Spp.ldlt().solve(y_pos);
+        if (mahal_sq > gate_sigma * gate_sigma) return false;
+
+        measurementUpdate(y.eval(), H, R_cov);
+        return true;
     }
 
     // 3-DOF PnP update: absolute position, unbiased anchor (no b_vio correction)
