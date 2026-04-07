@@ -135,7 +135,7 @@ void csvWrite(CsvLogger& logger, Args&&... args) {
 }
 
 // ============================================================
-// Transform  –  VIO frame → PnP (world) frame
+// Transform  –  VIO frame to PnP (world) frame
 // ============================================================
 class Transform
 {
@@ -160,7 +160,7 @@ public:
         return R_ * v;
     }
 
-    // Transform VIO quaternion [x,y,z,w] → PnP quaternion [x,y,z,w]
+    // Transform VIO quaternion [x,y,z,w] to PnP quaternion [x,y,z,w]
     // The yaw offset is applied as a left-multiplication: q_pnp = q_yaw ⊗ q_vio
     Eigen::Vector4d vioQuatToWorld(const Eigen::Vector4d& q_xyzw_vio) const
     {
@@ -267,15 +267,18 @@ public:
         cfg.vio_vel_std          = nh.param("vio_vel_std",          0.30);
         cfg.vio_quat_std         = nh.param("vio_quat_std",         0.05);
         cfg.pnp_pos_std          = nh.param("pnp_pos_std",          0.03);
-        cfg.vio_delay_compensation = nh.param("vio_delay_compensation", true);
-        cfg.vio_delay_sec          = nh.param("vio_delay_sec",          0.05);
+        cfg.vio_delay_compensation  = nh.param("vio_delay_compensation",  true);
+        cfg.vio_delay_sec           = nh.param("vio_delay_sec",           0.05);
+        cfg.vio_pos_bias_rw_std     = nh.param("vio_pos_bias_rw_std",     0.001);
 
         kf_.setConfig(cfg);
 
         gate_pose_delay_sec_ = nh.param("gate_pose_delay_sec", 0.1);
+        pnp_gate_sigma_       = nh.param("pnp_gate_sigma",      5.0);
         ROS_INFO("Gate pose delay compensation: %.3f s", gate_pose_delay_sec_);
+        ROS_INFO("PnP Mahalanobis gate: %.1f sigma", pnp_gate_sigma_);
 
-        // ── Frame transform (VIO → world/PnP) ─────────────────
+        // ── Frame transform (VIO to world/PnP) ─────────────────
         Eigen::Vector3d init_pos(
             nh.param("init_pos_x", 0.0),
             nh.param("init_pos_y", 0.0),
@@ -283,7 +286,7 @@ public:
         const double init_yaw = nh.param("init_yaw_rad", 0.0);
         transform_ = std::make_unique<Transform>(init_yaw, init_pos);
 
-        ROS_INFO_STREAM("VIO→World R:\n" << transform_->R());
+        ROS_INFO_STREAM("VIOtoWorld R:\n" << transform_->R());
 
         // ── MoCap gatekeeper ──────────────────────────────────
         gatekeeper_ = std::make_unique<MocapGatekeeper>(
@@ -473,13 +476,17 @@ private:
 
         drainBufferTo(t);
 
-        kf_.updatePnp(pos);
+        const bool accepted = kf_.updatePnp(pos, pnp_gate_sigma_);
 
-        if (log_pnp_)
-            log_pnp_->write(t, pos(0), pos(1), pos(2));
-
-        publishFused(t);
-        logState(t);
+        if (accepted) {
+            if (log_pnp_)
+                log_pnp_->write(t, pos(0), pos(1), pos(2));
+            // PnP update: correct state only, do not publish or log kf_traj
+            // (the corrected state will be logged by the next VIO callback)
+        } else {
+            ROS_WARN_THROTTLE(1.0, "PnP measurement rejected by Mahalanobis gate (sigma=%.1f)",
+                              pnp_gate_sigma_);
+        }
     }
 
     // ──────────────────────────────────────────────────────────
@@ -518,6 +525,7 @@ private:
                       /*pos_var=*/1.0, /*vel_var=*/1.0,
                       /*quat_var=*/0.1, /*accel_bias_var=*/0.01,
                       /*gyro_bias_var=*/0.001,
+                      /*vio_bias_var=*/4.0,   // large initial uncertainty lets filter discover bias quickly
                       /*t0=*/t);
 
         // Set up loggers
@@ -534,6 +542,9 @@ private:
             log_pnp_ = std::make_unique<CsvLogger>(
                 log_dir_, "pnp_detections",
                 std::vector<std::string>{"timestamp","px","py","pz"});
+            log_vio_bias_ = std::make_unique<CsvLogger>(
+                log_dir_, "vio_pos_bias",
+                std::vector<std::string>{"timestamp","bvx","bvy","bvz"});
         } catch (const std::exception& e) {
             ROS_ERROR("Failed to create loggers: %s", e.what());
         }
@@ -576,17 +587,21 @@ private:
     // ──────────────────────────────────────────────────────────
     void logState(double t)
     {
-        const Vec3 p  = kf_.getPosition();
-        const Vec3 v  = kf_.getVelocity();
-        const Vec3 ba = kf_.getAccelBias();
-        const Vec4 q  = kf_.getQuaternion();  // [qw, qx, qy, qz]
+        const Vec3 p   = kf_.getPosition();
+        const Vec3 v   = kf_.getVelocity();
+        const Vec3 ba  = kf_.getAccelBias();
+        const Vec4 q   = kf_.getQuaternion();   // [qw, qx, qy, qz]
+        const Vec3 bv  = kf_.getVioPosBias();   // world-frame VIO position bias
 
         if (log_bias_)
             log_bias_->write(t, ba(0), ba(1), ba(2));
 
         if (log_kf_)
             log_kf_->write(t, p(0), p(1), p(2), v(0), v(1), v(2),
-                           q(0), q(1), q(2), q(3));  // qw, qx, qy, qz
+                           q(0), q(1), q(2), q(3));
+
+        if (log_vio_bias_)
+            log_vio_bias_->write(t, bv(0), bv(1), bv(2));
     }
 
     // ──────────────────────────────────────────────────────────
@@ -613,6 +628,8 @@ private:
 
     // Gate pose delay compensation (subtracted from header stamp before EKF use)
     double gate_pose_delay_sec_ = 0.1;
+    // Mahalanobis distance gate for PnP (reject if sqrt(y^T S^-1 y) > sigma)
+    double pnp_gate_sigma_ = 5.0;
 
     // ROS interface
     ros::Subscriber sub_imu_, sub_vio_, sub_gate_, sub_mocap_;
@@ -624,6 +641,7 @@ private:
     std::unique_ptr<CsvLogger>   log_vio_;
     std::unique_ptr<CsvLogger>   log_kf_;
     std::unique_ptr<CsvLogger>   log_pnp_;
+    std::unique_ptr<CsvLogger>   log_vio_bias_;   // estimated VIO position bias (world frame)
 };
 
 // ============================================================

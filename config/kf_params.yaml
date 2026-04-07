@@ -3,8 +3,8 @@
 # vio_translation_rel_pnp: position of VIO origin expressed in World frame (m)
 # init_yaw_rad: yaw of VIO frame relative to World frame (rad)
 # ---------------------------------------------------------------------------
-init_pos_x: 0.0   # m 11.5
-init_pos_y: 0.0   # m 15.0
+init_pos_x: 11.5  # m 11.5
+init_pos_y: 15.0   # m 15.0
 init_pos_z: 0.0     # m
 init_yaw_rad: -0.0 # rad
 
@@ -12,7 +12,7 @@ init_yaw_rad: -0.0 # rad
 # Gate scene CSV path (used by GateMap)
 # Relative paths are resolved from the package root (kf_vio_pnp_ros1/)
 # ---------------------------------------------------------------------------
-scene_csv_path: config/single_scene.csv
+scene_csv_path: config/scene.csv
 
 # ---------------------------------------------------------------------------
 # Kalman filter noise parameters  (EKF full rigid-body)
@@ -29,6 +29,10 @@ accel_bias_rw_std: 0.001
 
 # Gyroscope bias random-walk std (rad/s per sqrt(s))
 gyro_bias_rw_std: 0.0001
+
+# VIO position bias random-walk std (m per sqrt(s))
+# Small value = treat VIO bias as nearly constant, large = allow fast drift
+vio_pos_bias_rw_std: 0.01
 
 # (legacy – kept for back-compat, not used by EKF)
 vio_bias_rw_std: 0.005
@@ -49,7 +53,12 @@ vio_vel_std: 0.05   # m/s
 vio_quat_std: 0.001  # rad  (orientation quaternion noise, fused with pos+vel in 9-DOF update)
 
 # PnP observation noise (more reliable position source)
-pnp_pos_std: 0.10   # m
+pnp_pos_std: 0.50   # m
+
+# PnP Mahalanobis gate: reject if sqrt(y^T S^{-1} y) > pnp_gate_sigma
+# 5.0 sigma ≈ chi2(3) CDF ~99.9999 % — rejects only gross outliers
+# Reduce to 3.0 for tighter gating when PnP detections are reliable
+pnp_gate_sigma: 3.0
 
 # ---------------------------------------------------------------------------
 # VIO delay compensation
