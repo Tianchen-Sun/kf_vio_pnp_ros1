@@ -32,24 +32,22 @@ gyro_bias_rw_std: 0.0001
 
 # VIO position bias random-walk std (m per sqrt(s))
 # Small value = treat VIO bias as nearly constant, large = allow fast drift
-vio_pos_bias_rw_std: 0.01
+vio_pos_bias_rw_std: 0.1
 
-# (legacy – kept for back-compat, not used by EKF)
-vio_bias_rw_std: 0.005
 
 # ---------------------------------------------------------------------------
 # IMU Butterworth low-pass filter (2nd-order, applied before EKF propagation)
 # ---------------------------------------------------------------------------
 # Expected IMU publishing rate (Hz) – sets the Nyquist frequency
-imu_sample_hz: 200.0
+imu_sample_hz: 247.0
 # Accelerometer cutoff frequency (Hz)
 imu_accel_cutoff_hz: 30.0
 # Gyroscope cutoff frequency (Hz)
 imu_gyro_cutoff_hz: 50.0
 
 # VIO observation noise
-vio_pos_std: 0.05   # m
-vio_vel_std: 0.05   # m/s
+vio_pos_std: 0.01   # m
+vio_vel_std: 0.01   # m/s
 vio_quat_std: 0.001  # rad  (orientation quaternion noise, fused with pos+vel in 9-DOF update)
 
 # PnP observation noise (more reliable position source)
@@ -71,7 +69,7 @@ vio_delay_sec: 0.0667   # seconds
 # The gate pose message arrives with a processing delay; subtract this from
 # the header timestamp before aligning with the IMU buffer.
 # ---------------------------------------------------------------------------
-gate_pose_delay_sec: 0.1   # seconds (default 100 ms)
+gate_pose_delay_sec: 0.0   # seconds (default 100 ms)
 
 # ---------------------------------------------------------------------------
 # MoCap gating options

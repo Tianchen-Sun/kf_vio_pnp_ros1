@@ -24,8 +24,7 @@ class KFConfig:
     vio_delay_compensation: bool = False
     vio_delay_sec: float = 0.0
 
-    # ---- back-compat aliases (ignored by EKF but kept so yaml loading doesn't break) ----
-    vio_bias_rw_std: float = 0.005  # legacy – not used
+
 
 
 # ---------------------------------------------------------------------------
